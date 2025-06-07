@@ -107,7 +107,7 @@ METHOD Backward(d_output) CLASS MultiHeadAttention
 
    // Gradiente para los scores de atención (antes de softmax)
    d_attention_scores := hb_MatrixMultiply(attention_grad, hb_MatrixTranspose(::V_proj))
-   d_attention_scores := SoftmaxBackward(::attention_probs, d_attention_scores)
+   d_attention_scores := hb_SoftmaxBackward(::attention_probs, d_attention_scores)
 
    // Gradiente para Q y K
    dQ := hb_MatrixMultiply(d_attention_scores, ::WK)
@@ -151,30 +151,6 @@ METHOD Backward(d_output) CLASS Transformer
       ::layers[i]:Backward(d_output)
    NEXT
 RETURN NIL
-
-// Función para aplicar Softmax con estabilidad numérica
-FUNCTION Softmax(matrix)
-   LOCAL rows := Len(matrix)
-   LOCAL cols := Len(matrix[1])
-   LOCAL result := Array(rows, cols)
-   local i, j, max_val, sum_exp, exp_values
-
-   FOR i := 1 TO rows
-      max_val := hb_ArrayMax(matrix[i])
-      sum_exp := 0
-      exp_values := Array(cols)
-
-      FOR j := 1 TO cols
-         exp_values[j] := Exp(matrix[i][j] - max_val)
-         sum_exp += exp_values[j]
-      NEXT
-
-      FOR j := 1 TO cols
-         result[i][j] := exp_values[j] / sum_exp
-      NEXT
-   NEXT
-
-RETURN result
 
 // Función para actualizar los pesos del Transformer
 FUNCTION ActualizarPesos(transformer, learning_rate)
@@ -534,6 +510,75 @@ HB_FUNC( HB_SOFTMAX )
    else
    {
       hb_errRT_BASE( EG_ARG, 3012, NULL, HB_ERR_FUNCNAME, HB_ERR_ARGS_BASEPARAMS );
+   }
+}
+
+HB_FUNC( HB_SOFTMAXBACKWARD )
+{
+   PHB_ITEM pProbs = hb_param(1, HB_IT_ARRAY); // Softmax probabilities
+   PHB_ITEM pGrad = hb_param(2, HB_IT_ARRAY);  // Upstream gradient
+
+   if (pProbs && pGrad)
+   {
+      HB_SIZE nRows = hb_arrayLen(pProbs), nCols;
+      PHB_ITEM pFirstRow, pResult, i, j, k;
+
+      if (nRows == 0 || hb_arrayLen(pGrad) != nRows)
+      {
+         hb_errRT_BASE(EG_ARG, 3012, "Invalid matrix dimensions", HB_ERR_FUNCNAME, HB_ERR_ARGS_BASEPARAMS);
+         return;
+      }
+
+      pFirstRow = hb_arrayGetItemPtr(pProbs, 1);
+      nCols = hb_arrayLen(pFirstRow);
+      if (nCols == 0 || hb_arrayLen(hb_arrayGetItemPtr(pGrad, 1)) != nCols)
+      {
+         hb_errRT_BASE(EG_ARG, 3012, "Column dimensions do not match", HB_ERR_FUNCNAME, HB_ERR_ARGS_BASEPARAMS);
+         return;
+      }
+
+      // Create result matrix (nRows x nCols)
+      pResult = hb_itemArrayNew(nRows);
+
+      // Process each row
+      for (i = 0; i < nRows; i++)
+      {
+         PHB_ITEM pProbRow = hb_arrayGetItemPtr(pProbs, i + 1);
+         PHB_ITEM pGradRow = hb_arrayGetItemPtr(pGrad, i + 1);
+         PHB_ITEM pResultRow = hb_itemArrayNew(nCols);
+         
+         // Compute gradient for each element in the row
+         for (j = 0; j < nCols; j++)
+         {
+            double sum = 0.0;
+            double prob_j = hb_arrayGetND(pProbRow, j + 1);
+            double grad_j = hb_arrayGetND(pGradRow, j + 1);
+
+            for (k = 0; k < nCols; k++)
+            {
+               double prob_k = hb_arrayGetND(pProbRow, k + 1);
+               double grad_k = hb_arrayGetND(pGradRow, k + 1);
+               if (j == k)
+               {
+                  sum += prob_j * (1.0 - prob_j) * grad_k;
+               }
+               else
+               {
+                  sum += -prob_j * prob_k * grad_k;
+               }
+            }
+            hb_arraySetND(pResultRow, j + 1, sum);
+         }
+
+         hb_arraySet(pResult, i + 1, pResultRow);
+         hb_itemRelease(pResultRow);
+      }
+
+      hb_itemReturnRelease(pResult);
+   }
+   else
+   {
+      hb_errRT_BASE(EG_ARG, 3012, "Invalid parameters", HB_ERR_FUNCNAME, HB_ERR_ARGS_BASEPARAMS);
    }
 }
 
