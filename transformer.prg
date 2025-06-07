@@ -93,27 +93,33 @@ METHOD Forward(Q, K, V) CLASS MultiHeadAttention
 RETURN hb_MatrixMultiply(::attention_probs, ::V_proj)
 
 METHOD Backward(d_output) CLASS MultiHeadAttention
-   local attention_grad, Q_grad, K_grad, V_grad
-   // Reiniciar gradientes antes de acumularlos
-   ::InitGradients()
-   
-   // Gradientes para la atención
-   attention_grad := d_output
-   
-   // Gradientes para las matrices de peso
-   ::dWO := hb_MatrixMultiply(hb_MatrixTranspose(attention_grad), ::V_proj)
-   
-   // Gradientes para Q, K, V proyectados
-   Q_grad := hb_MatrixMultiply(attention_grad, ::WQ)
-   K_grad := hb_MatrixMultiply(attention_grad, ::WK)
-   V_grad := hb_MatrixMultiply(attention_grad, ::WV)
-   
-   // Actualizar gradientes acumulados usando los valores cacheados
-   ::dWQ := hb_MatrixSum(::dWQ, hb_MatrixMultiply(hb_MatrixTranspose(Q_grad), ::K_proj))
-   ::dWK := hb_MatrixSum(::dWK, hb_MatrixMultiply(hb_MatrixTranspose(K_grad), ::Q_proj))
-   ::dWV := hb_MatrixSum(::dWV, hb_MatrixMultiply(hb_MatrixTranspose(V_grad), ::attention_scores))
+   LOCAL attention_grad, dV, d_attention_scores, dQ, dK, dV
 
-RETURN d_output
+   // Reiniciar gradientes
+   ::InitGradients()
+
+   // Gradiente de la salida
+   attention_grad := d_output
+
+   // Gradiente para V y WO
+   dV := hb_MatrixMultiply(hb_MatrixTranspose(::attention_probs), attention_grad)
+   ::dWO := hb_MatrixMultiply(hb_MatrixTranspose(::V_proj), attention_grad)
+
+   // Gradiente para los scores de atención (antes de softmax)
+   d_attention_scores := hb_MatrixMultiply(attention_grad, hb_MatrixTranspose(::V_proj))
+   d_attention_scores := SoftmaxBackward(::attention_probs, d_attention_scores)
+
+   // Gradiente para Q y K
+   dQ := hb_MatrixMultiply(d_attention_scores, ::WK)
+   dK := hb_MatrixMultiply(hb_MatrixTranspose(d_attention_scores), ::Q_proj)
+
+   // Actualizar gradientes de los pesos
+   ::dWQ := hb_MatrixMultiply(hb_MatrixTranspose(Q), dQ)
+   ::dWK := hb_MatrixMultiply(hb_MatrixTranspose(K), dK)
+   ::dWV := hb_MatrixMultiply(hb_MatrixTranspose(V), dV)
+
+   // Devolver gradiente para el siguiente layer
+RETURN dQ
 
 // Clase para implementar el Transformer
 CLASS Transformer
